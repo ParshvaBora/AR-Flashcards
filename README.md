@@ -1,6 +1,6 @@
 # AR Flashcard Learning System (E5): Solar System
 
-Real-time hand-tracked AR flashcards in the browser. Works offline on a MacBook Air M2 (8 GB). No markers, no install, no build step.
+Real-time hand-tracked AR flashcards in the browser. Works offline. No markers, no install, no build step.
 
 ## Run it
 ```bash
@@ -22,9 +22,6 @@ The webcam feed is the real world. MediaPipe Hands tracks your hand 30+ times a 
 
 Keyboard: `Space` reveal, `G` got it, `R` review, `D` card list, `1`-`6` jump to a card.
 Tips: good front lighting, hand about 40 to 70 cm from the camera, palm facing the camera.
-
-## Demo capture on macOS
-Screenshot `Cmd+Shift+4`, screen recording `Cmd+Shift+5`.
 
 ## Files
 - `index.html`: all code, in 6 commented sections (content, learner state, AR/hand tracking, logic, render loop, UI).
