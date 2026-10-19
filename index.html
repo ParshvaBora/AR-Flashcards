@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AR Flashcards: Solar System</title>
+<script src="lib/mediapipe/hands.js"></script>
+<style>
+/* ---------- Design tokens: Apple HIG roles (adaptive light/dark) ---------- */
+:root {
+  --blue: #007AFF;  --green: #34C759;  --red: #FF3B30;
+  --label: #000;    --label2: #3C3C43; --gray5: #E5E5EA;
+  --glass: rgba(255,255,255,.72);  --glass-edge: rgba(255,255,255,.5);
+  --font: -apple-system, 'SF Pro', system-ui, sans-serif;
+  --s1: 8px; --s2: 16px; --s3: 24px;          /* 8pt grid */
+}
+@media (prefers-color-scheme: dark) {
+  :root { --blue: #0A84FF; --green: #30D158; --red: #FF453A;
+          --label: #fff; --label2: #EBEBF5; --gray5: #2C2C2E;
+          --glass: rgba(28,28,30,.72); --glass-edge: rgba(255,255,255,.12); }
+}
+* { box-sizing: border-box; }
+html { background: #000; }
+html, body { margin: 0; height: 100%; overflow: hidden;
+  font: 17px/1.3 var(--font); color: var(--label); -webkit-font-smoothing: antialiased; }
+body { background: transparent; }
+#video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 0; background: linear-gradient(#1c1c1e, #000); }
+#ar { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 1; touch-action: none; }
+
+/* ---------- Liquid-glass surfaces float above the camera feed ---------- */
+.glass { position: fixed; left: var(--s2); right: var(--s2); z-index: 10; max-width: 560px; margin-inline: auto;
+  background: var(--glass); border: .5px solid var(--glass-edge); border-radius: 24px;
+  -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: 0 8px 32px rgba(0,0,0,.18); }
+#bar { top: var(--s2); display: flex; align-items: center; justify-content: space-between; padding: var(--s1) var(--s1) var(--s1) var(--s2); }
+#bar h1 { font-size: 17px; font-weight: 600; margin: 0; }
+#bar small { display: block; font-size: 13px; color: var(--label2); }
+#sheet { bottom: var(--s2); padding: var(--s2); }
+#deck { top: 80px; bottom: auto; padding: var(--s1); display: none; }
+#deck.open { display: block; }
+
+.title { font-size: 22px; font-weight: 600; margin: 0 0 var(--s1); }
+.sub   { font-size: 15px; color: var(--label2); margin: 0 0 var(--s2); }
+.answer{ font-size: 28px; font-weight: 700; margin: 0 0 4px; }
+.row   { display: flex; gap: var(--s1); }
+.row > * { flex: 1; }
+
+button { font: 600 17px var(--font); min-height: 44px; min-width: 44px; border: 0; border-radius: 14px;
+  padding: 0 var(--s2); cursor: pointer; color: var(--blue); background: color-mix(in srgb, var(--blue) 14%, transparent); }
+button:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+button.fill   { color: #fff; background: var(--blue); }
+button.good   { color: #fff; background: var(--green); }
+button.again  { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+button:active { transform: scale(.97); }
+
+.meter { height: 4px; border-radius: 2px; background: var(--gray5); overflow: hidden; margin-top: var(--s2); }
+.meter i { display: block; height: 100%; width: 0; background: var(--blue); }
+
+#deck button { display: flex; width: 100%; justify-content: space-between; align-items: center; background: none; color: var(--label); font-weight: 500; text-align: left; }
+#deck button:hover { background: color-mix(in srgb, var(--label) 6%, transparent); }
+.dots { display: inline-flex; gap: 4px; }
+.dots b { width: 8px; height: 8px; border-radius: 50%; background: var(--gray5); }
+.dots b.on { background: var(--green); }
+#toast { font-size: 15px; font-weight: 600; margin: 0 0 var(--s1); min-height: 20px; }
+@media (prefers-reduced-motion: reduce) { button:active { transform: none; } }
+</style>
+</head>
+<body>
+
+<video id="video" autoplay playsinline muted></video>
+<canvas id="ar"></canvas>
+<div id="cam" class="glass" style="top:88px;display:none;padding:16px" role="alert"></div>
+<div id="bar" class="glass">
+  <div><h1>Solar System</h1><small id="mastery">Mastery 0%</small></div>
+  <button id="deckBtn" aria-expanded="false">Cards</button>
+</div>
+<div id="deck" class="glass" role="list"></div>
+<div id="sheet" class="glass" aria-live="polite"></div>
+
+<script>
+/* ===== 1. CONTENT ===== */
+const DECK = [
+  { id: 0, name: 'Mercury', q: 'Which planet is closest to the Sun?',                                   fact: 'Orbits the Sun in just 88 Earth days.',         base: '#a8a29e', kind: 'craters' },
+  { id: 1, name: 'Venus',   q: 'Which planet is the hottest, thanks to a thick CO₂ atmosphere?',         fact: 'Surface is about 465 °C, hotter than Mercury.', base: '#e8c27a', kind: 'bands' },
+  { id: 2, name: 'Earth',   q: 'Which is the only planet known to have life and liquid surface water?', fact: 'About 71% of its surface is ocean.',            base: '#2f7be0', kind: 'earth' },
+  { id: 3, name: 'Mars',    q: 'Which planet is called the Red Planet, and why?',                        fact: 'Iron oxide (rust) coats its surface.',          base: '#c1440e', kind: 'craters' },
+  { id: 4, name: 'Jupiter', q: 'Which is the largest planet, with a storm older than 150 years?',        fact: 'The Great Red Spot is a giant storm.',          base: '#d9a066', kind: 'bands' },
+  { id: 5, name: 'Saturn',  q: 'Which planet has the most prominent ring system?',                       fact: 'Rings are mostly ice, spanning ~280,000 km.',   base: '#e3cf9a', kind: 'bands', ring: true },
+];
+const BLUE = '#007AFF', GREEN = '#34C759', RED = '#FF3B30';
+const $ = id => document.getElementById(id);
+
+/* ===== 2. LEARNER STATE (Leitner boxes) ===== */
+let box = {};
+try { box = JSON.parse(localStorage.getItem('ar-flash-box') || '{}'); } catch (e) {}
+DECK.forEach(c => box[c.id] = box[c.id] || 1);
+const save = () => { try { localStorage.setItem('ar-flash-box', JSON.stringify(box)); } catch (e) {} };
+const mastery = () => Math.round(DECK.reduce((s, c) => s + (box[c.id] - 1), 0) / (DECK.length * 2) * 100);
+
+/* ===== 3. AR LAYER: camera + real-time hand tracking (MediaPipe Hands) ===== */
+const video = $('video'), cv = $('ar'), g = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+function resize() { DPR = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight; cv.width = W * DPR; cv.height = H * DPR; g.setTransform(DPR, 0, 0, DPR, 0, 0); }
+addEventListener('resize', resize); resize();
+
+const note = (title, text) => { const c = $('cam'); c.style.display = 'block'; c.innerHTML = `<p class="title">${title}</p><p class="sub" style="margin:0">${text}</p>`; };
+let trackerOK = false, lastHandAt = 0;
+
+async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
+    return note('Camera unavailable', 'Open this page at http://localhost:8000, not as a file.');
+  try {
+    video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' }, audio: false });
+    await video.play();
+  } catch (e) {
+    return note('Camera unavailable', { NotAllowedError: 'Permission denied. Allow the camera, then reload. On Mac also check System Settings > Privacy & Security > Camera.',
+      NotFoundError: 'No camera found.', NotReadableError: 'Another app is using the camera. Quit it and reload.' }[e.name] || e.name + ': ' + e.message);
+  }
+  if (typeof Hands === 'undefined') return note('Hand tracking missing', 'Keep the lib folder next to index.html.');
+  const hands = new Hands({ locateFile: f => 'lib/mediapipe/' + f });
+  hands.setOptions({ maxNumHands: 2, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
+  hands.onResults(onResults);
+  let busy = false;
+  const pump = async () => {
+    if (!busy && video.readyState >= 2) { busy = true; try { await hands.send({ image: video }); trackerOK = true; } catch (e) { note('Hand tracking error', e.message || String(e)); } busy = false; }
+    requestAnimationFrame(pump);
+  };
+  pump();
+}
+
+/* Map a MediaPipe landmark (0..1 in the video) to screen pixels, matching the mirrored object-fit:cover video */
+function toScreen(p) {
+  const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+  const k = Math.max(W / vw, H / vh), ox = (W - vw * k) / 2, oy = (H - vh * k) / 2;
+  return { x: (1 - p.x) * vw * k + ox, y: p.y * vh * k + oy };
+}
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+/* The tracked hand that carries the planet, and the fingertips that can poke it */
+let hand = null;                     // { cx, cy, size, pinch }
+let tips = [];                       // index fingertips of all hands (screen px)
+let pinched = false;
+function onResults(res) {
+  const list = (res.multiHandLandmarks || []).map(l => l.map(toScreen));
+  tips = list.map(l => l[8]);
+  if (!list.length) { tips = []; return; }          // keep last hand briefly (see 'tracked' grace period in frame())
+  lastHandAt = performance.now();
+  const l = list[0];
+  const palm = [0, 5, 9, 13, 17].reduce((a, i) => ({ x: a.x + l[i].x / 5, y: a.y + l[i].y / 5 }), { x: 0, y: 0 });
+  const size = dist(l[0], l[9]);                         // wrist to middle knuckle: scales with distance to camera
+  const pinchRatio = dist(l[4], l[8]) / size;
+  const wasPinched = pinched;
+  pinched = pinchRatio < (pinched ? 0.45 : 0.3);         // hysteresis
+  hand = { x: palm.x, y: palm.y, size, angle: Math.atan2(l[9].y - l[0].y, l[9].x - l[0].x) };
+  if (pinched && !wasPinched) reveal();   // pinch = "tap" on the planet
+}
+
+/* ===== 4. INTERACTION LOGIC ===== */
+let active = null, revealed = false, toast = '';
+const hit = { pinchOK: true };
+const planet = { x: 0, y: 0, r: 0, vis: 0 };             // smoothed on-screen state
+let zoneHold = { good: 0, again: 0 };
+
+function setActive(id) { active = id; revealed = false; toast = ''; zoneHold = { good: 0, again: 0 }; render(); }
+function reveal() { if (active === null || revealed) return; revealed = true; zoneHold = { good: 0, again: 0 }; render(); }
+let flash = null;                                         // { color, t0 } visual feedback ring
+function rate(good) {
+  if (active === null || !revealed) return;
+  const id = active, c = DECK[id];
+  box[id] = good ? Math.min(box[id] + 1, 3) : 1; save();
+  flash = { color: good ? GREEN : RED, t0: performance.now() };
+  toast = good ? `Nice. ${c.name} moved to Box ${box[id]}.` : `${c.name} goes back to Box 1.`;
+  revealed = false; active = null; render();
+  const next = DECK.map(d => d.id).filter(x => x !== id)
+    .sort((a, b) => box[a] - box[b] || ((a - id + 6) % 6) - ((b - id + 6) % 6))[0];
+  setTimeout(() => { if (active === null) setActive(next); }, 1600);
+}
+
+/* Reveal zones: carry the planet (your hand) into a target and hold, or click it */
+const zones = () => ({ again: { x: W * 0.16, y: H * 0.46, r: 64, c: RED, t: 'Review' }, good: { x: W * 0.84, y: H * 0.46, r: 64, c: GREEN, t: 'Got it' } });
+
+/* ===== 5. RENDER LOOP (canvas on top of the live camera) ===== */
+let t0 = performance.now();
+function frame(now) {
+  g.clearRect(0, 0, W, H);
+  const tracked = hand && now - lastHandAt < 500;
+  // target: on your palm if tracked, otherwise rest in the middle with a hint
+  const tx = tracked ? hand.x : W / 2, ty = tracked ? hand.y - (hand.size * 0.15) : H * 0.4;
+  const tr = tracked ? Math.max(36, hand.size * 0.95) : Math.min(W, H) * 0.14;
+  if (!planet.vis) { planet.x = tx; planet.y = ty; planet.r = tr; }
+  const a = tracked ? 0.45 : 0.12;
+  planet.x += (tx - planet.x) * a; planet.y += (ty - planet.y) * a; planet.r += (tr - planet.r) * a; planet.vis = 1;
+  hit.pinchOK = tracked;
+
+  if (active !== null || flash) {
+    if (revealed) drawZones(now, tracked);
+    const c = DECK[active !== null ? active : lastActive];
+    if (active !== null) lastActive = active;
+    drawPlanet(c, planet.x, planet.y, planet.r, now);
+    drawFeedback(now);
+    if (active !== null) pokeCheck(now);
+    drawHand(tracked);
+    if (revealed) { g.font = '600 20px -apple-system, system-ui, sans-serif'; g.textAlign = 'center'; g.fillStyle = '#fff'; g.shadowColor = 'rgba(0,0,0,.6)'; g.shadowBlur = 8;
+                    g.fillText(c.name, planet.x, planet.y + planet.r * (c.ring ? 1.95 : 1.55) + 26); g.shadowBlur = 0; }
+  }
+  if (!tracked && trackerOK && active !== null) hint('Show your open hand to pick up the planet');
+  requestAnimationFrame(frame);
+}
+let lastActive = 0;
+function hint(t) { g.font = '600 17px -apple-system, system-ui, sans-serif'; g.textAlign = 'center'; g.fillStyle = 'rgba(255,255,255,.95)'; g.shadowColor = 'rgba(0,0,0,.7)'; g.shadowBlur = 8; g.fillText(t, W / 2, H * 0.4 + Math.min(W, H) * 0.14 + 40); g.shadowBlur = 0; }
+
+function drawPlanet(c, x, y, r, now) {
+  const spin = (now - t0) / 6000;
+  g.save();
+  if (c.ring) ring(c, x, y, r, true);
+  g.beginPath(); g.arc(x, y, r, 0, 7); g.clip();
+  g.fillStyle = c.base; g.fillRect(x - r, y - r, 2 * r, 2 * r);
+  const sx = ((spin * r * 2) % (r * 4)) - r * 2;                     // horizontal drift fakes rotation
+  if (c.kind === 'bands') for (let i = -5; i <= 5; i++) { g.fillStyle = i % 2 ? 'rgba(120,70,30,.28)' : 'rgba(255,240,210,.22)'; g.fillRect(x - r, y + i * r * 0.17, 2 * r, r * 0.09); }
+  if (c.kind === 'earth') for (let i = 0; i < 4; i++) { const bx = x + (((i * 0.9 + spin * 1.2) % 3.6) - 1.8) * r, by = y + (i % 2 ? 0.35 : -0.3) * r; g.fillStyle = '#3aa55d'; g.beginPath(); g.ellipse(bx, by, r * 0.38, r * 0.24, 0.5, 0, 7); g.fill(); }
+  if (c.kind === 'craters') for (let i = 0; i < 6; i++) { const bx = x + (((i * 0.55 + spin) % 2.4) - 1.2) * r, by = y + ((i * 37 % 11) / 11 - 0.5) * r * 1.4; g.fillStyle = 'rgba(0,0,0,.18)'; g.beginPath(); g.arc(bx, by, r * (0.09 + (i % 3) * 0.04), 0, 7); g.fill(); }
+  const sh = g.createRadialGradient(x - r * 0.4, y - r * 0.45, r * 0.1, x, y, r * 1.05);    // sphere shading
+  sh.addColorStop(0, 'rgba(255,255,255,.35)'); sh.addColorStop(0.5, 'rgba(0,0,0,0)'); sh.addColorStop(1, 'rgba(0,0,0,.6)');
+  g.fillStyle = sh; g.fillRect(x - r, y - r, 2 * r, 2 * r);
+  g.restore();
+  if (c.ring) ring(c, x, y, r, false);
+}
+function ring(c, x, y, r, back) {
+  g.save(); g.translate(x, y); g.rotate(-0.35); g.lineWidth = r * 0.28; g.strokeStyle = 'rgba(205,185,138,.85)';
+  g.beginPath(); g.ellipse(0, 0, r * 1.7, r * 0.5, 0, back ? Math.PI : 0, back ? 2 * Math.PI : Math.PI); g.stroke(); g.restore();
+}
+function drawFeedback(now) {
+  if (!flash) return; const p = (now - flash.t0) / 1400; if (p > 1) { flash = null; return; }
+  g.save(); g.strokeStyle = flash.color; g.globalAlpha = 1 - p; g.lineWidth = 6;
+  g.beginPath(); g.arc(planet.x, planet.y, planet.r * (1.2 + p * 0.9), 0, 7); g.stroke(); g.restore();
+}
+function drawHand(tracked) {
+  g.save(); g.fillStyle = 'rgba(255,255,255,.9)'; g.strokeStyle = BLUE; g.lineWidth = 3;
+  tips.forEach(p => { g.beginPath(); g.arc(p.x, p.y, 9, 0, 7); g.fill(); g.stroke(); }); g.restore();
+  if (tracked) { g.save(); g.strokeStyle = pinched ? GREEN : 'rgba(255,255,255,.55)'; g.lineWidth = 3; g.setLineDash([6, 8]); g.beginPath(); g.arc(planet.x, planet.y, planet.r + 10, 0, 7); g.stroke(); g.restore(); }
+}
+let pokeT = 0;
+function pokeCheck(now) {                                  // another fingertip touching the planet = tap
+  if (revealed) return;
+  const touching = tips.some(p => dist(p, planet) < planet.r * 0.9 && (!hand || dist(p, hand) > hand.size * 0.5));
+  if (touching) { if (!pokeT) pokeT = now; if (now - pokeT > 250) { pokeT = 0; reveal(); } } else pokeT = 0;
+}
+function drawZones(now, tracked) {
+  const z = zones(), dt = 16;
+  for (const k of ['again', 'good']) {
+    const q = z[k], inside = dist(planet, q) < q.r + planet.r * 0.3;
+    zoneHold[k] = inside ? zoneHold[k] + dt : Math.max(0, zoneHold[k] - dt * 2);
+    g.save(); g.fillStyle = q.c; g.globalAlpha = inside ? 0.55 : 0.3; g.beginPath(); g.arc(q.x, q.y, q.r, 0, 7); g.fill(); g.globalAlpha = 1;
+    g.strokeStyle = '#fff'; g.lineWidth = 4; g.beginPath(); g.arc(q.x, q.y, q.r, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * Math.min(zoneHold[k] / 800, 1)); g.stroke();
+    g.fillStyle = '#fff'; g.font = '600 17px -apple-system, system-ui, sans-serif'; g.textAlign = 'center'; g.fillText(q.t, q.x, q.y + 6); g.restore();
+    if (zoneHold[k] >= 800) { zoneHold = { good: 0, again: 0 }; return rate(k === 'good'); }
+  }
+}
+/* mouse / trackpad taps work too */
+cv.addEventListener('pointerdown', e => {
+  const p = { x: e.clientX, y: e.clientY };
+  if (active !== null && !revealed && dist(p, planet) < planet.r * 1.2) return reveal();
+  if (revealed) { const z = zones(); if (dist(p, z.good) < z.good.r) return rate(true); if (dist(p, z.again) < z.again.r) return rate(false); }
+});
+
+/* ===== 6. UI (HTML overlay, Apple HIG styling) ===== */
+function render() {
+  $('mastery').textContent = 'Mastery ' + mastery() + '%';
+  const s = $('sheet');
+  if (active === null) {
+    s.innerHTML = `<p id="toast" style="color:${/back/.test(toast) ? 'var(--red)' : 'var(--green)'}">${toast}</p><p class="title">Next card coming up</p><p class="sub">Mastery updates as you go.</p>`;
+  } else {
+    const c = DECK[active];
+    s.innerHTML = revealed
+      ? `<p class="answer">${c.name}</p><p class="sub">${c.fact} · Box ${box[active]}. Carry the planet into a target, or tap one.</p>
+         <div class="row"><button class="again" id="again">Review again</button><button class="good" id="good">Got it</button></div>`
+      : `<p class="title">${c.q}</p><p class="sub">Pinch the planet, touch it with a finger of your other hand, or tap it.</p>
+         <button class="fill" id="rev" style="width:100%">Reveal</button>`;
+    if (revealed) { $('again').onclick = () => rate(false); $('good').onclick = () => rate(true); }
+    else          { $('rev').onclick = reveal; }
+  }
+  $('deck').innerHTML = DECK.map(c => `<button data-id="${c.id}"><span>${c.name}</span>
+     <span class="dots" aria-label="Box ${box[c.id]} of 3">${[1, 2].map(n => `<b class="${box[c.id] > n ? 'on' : ''}"></b>`).join('')}</span></button>`).join('');
+  document.querySelectorAll('#deck button').forEach(b => b.onclick = () => { setActive(+b.dataset.id); toggleDeck(false); });
+}
+function toggleDeck(force) { const open = force ?? !$('deck').classList.contains('open'); $('deck').classList.toggle('open', open); $('deckBtn').setAttribute('aria-expanded', open); }
+$('deckBtn').onclick = () => toggleDeck();
+addEventListener('keydown', e => {
+  if (e.key === ' ') { e.preventDefault(); reveal(); }
+  if (e.key === 'g') rate(true);
+  if (e.key === 'r') rate(false);
+  if (e.key === 'd') toggleDeck();
+  if (/^[1-6]$/.test(e.key)) setActive(+e.key - 1);
+});
+
+setActive(0);
+requestAnimationFrame(frame);
+startCamera();
+</script>
+</body>
+</html>
